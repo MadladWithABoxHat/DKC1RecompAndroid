@@ -1,4 +1,4 @@
-# DKC1Recomp
+# Donkey Kong Country 1 Android Port (DKC1Recomp) by MadladWithABoxHat
 
 Credits to **elliotttate** who ported it to windows,mac and iOS which I could use as a strong foundation for the android port
 
