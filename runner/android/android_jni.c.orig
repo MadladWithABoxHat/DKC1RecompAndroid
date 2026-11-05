@@ -1,0 +1,155 @@
+#include <jni.h>
+#include <android/log.h>
+#include <stdint.h>
+#include <stdlib.h>
+
+#include "common_cpu_infra.h"
+#include "common_rtl.h"
+#include "dkc1_game.h"
+#include "dkc1_video.h"
+#include "verified_rom.h"
+#include "android_audio.h"
+
+#define LOG_TAG "DKC1Recomp"
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+
+#define GAME_WIDTH 256
+#define GAME_HEIGHT 224
+
+static uint8_t *s_rom = NULL;
+static uint8_t s_pixels[kDkc1VideoMaxWidth * kDkc1VideoHeight * 4];
+static int s_initialized = 0;
+
+JNIEXPORT jboolean JNICALL
+Java_com_dkc1recomp_android_MainActivity_nativeInit(
+        JNIEnv *env, jobject thiz, jstring rom_path, jstring save_root) {
+
+    const char *rom = (*env)->GetStringUTFChars(env, rom_path, NULL);
+    const char *saves = (*env)->GetStringUTFChars(env, save_root, NULL);
+
+    if (!rom || !saves) {
+        if (rom) (*env)->ReleaseStringUTFChars(env, rom_path, rom);
+        if (saves) (*env)->ReleaseStringUTFChars(env, save_root, saves);
+        return JNI_FALSE;
+    }
+
+    size_t rom_size = 0;
+    char error[256] = {0};
+
+    s_rom = Dkc1ReadVerifiedRom(rom, &rom_size, error, sizeof(error));
+
+    (*env)->ReleaseStringUTFChars(env, rom_path, rom);
+
+    if (!s_rom) {
+        LOGE("ROM loading failed: %s", error);
+        (*env)->ReleaseStringUTFChars(env, save_root, saves);
+        return JNI_FALSE;
+    }
+
+    RtlSetSaveRoot(saves);
+    (*env)->ReleaseStringUTFChars(env, save_root, saves);
+    RtlEnsureSaveDir();
+
+    if (!Dkc1VideoSetRenderWidth(GAME_WIDTH)) {
+        LOGE("Could not set render width");
+        free(s_rom);
+        s_rom = NULL;
+        return JNI_FALSE;
+    }
+
+    Dkc1VideoSetRom(s_rom, rom_size);
+    RtlRegisterGame(Dkc1GameInfo());
+
+    if (!SnesInit(s_rom, (int)rom_size)) {
+        LOGE("SnesInit failed");
+        free(s_rom);
+        s_rom = NULL;
+        return JNI_FALSE;
+    }
+
+    Dkc1BeginDrawing(s_pixels, GAME_WIDTH * 4);
+
+    RtlReadSram();
+
+    if (!Dkc1AndroidAudioInit()) {
+        LOGE("Audio initialization failed. Continuing without audio.");
+    }
+
+    s_initialized = 1;
+    LOGI("Engine initialized successfully");
+
+    return JNI_TRUE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_dkc1recomp_android_MainActivity_nativeFrame(
+        JNIEnv *env, jobject thiz, jint input
+) {
+    if (!s_initialized) return JNI_FALSE;
+
+    RtlRunFrame((uint32_t)input);
+
+    if (g_fail || !Dkc1LastLleResult()) {
+        LOGE("Engine stopped during frame execution");
+        return JNI_FALSE;
+    }
+
+    /* The PPU draw step must run exactly once per emulated frame, right after
+     * RtlRunFrame (iOS, Windows and headless hosts all do this). It renders
+     * the frame, runs HDMA and does the VBlank OAM-port reload. If catch-up
+     * ticks run several RtlRunFrame calls before a single draw, OAM/sprite
+     * state is misaligned for the next presented frame. */
+    Dkc1DrawPpuFrame();
+
+    Dkc1AndroidAudioRenderFrame();
+
+    return JNI_TRUE;
+}
+
+JNIEXPORT void JNICALL
+Java_com_dkc1recomp_android_MainActivity_nativeDraw(
+        JNIEnv *env, jobject thiz
+) {
+    /* Intentionally empty: drawing now happens inside nativeFrame(), once per
+     * emulated frame. Kept so the Kotlin side does not have to change. */
+    (void)env;
+    (void)thiz;
+}
+
+JNIEXPORT jobject JNICALL
+Java_com_dkc1recomp_android_MainActivity_nativeGetFrameBuffer(
+        JNIEnv *env, jobject thiz) {
+
+    if (!s_initialized)
+        return NULL;
+
+    return (*env)->NewDirectByteBuffer(
+            env,
+            s_pixels,
+            GAME_WIDTH * GAME_HEIGHT * 4
+    );
+}
+
+JNIEXPORT void JNICALL
+Java_com_dkc1recomp_android_MainActivity_nativeSetPaused(
+        JNIEnv *env, jobject thiz, jboolean paused
+) {
+    Dkc1AndroidAudioSetPaused(paused == JNI_TRUE);
+}
+
+JNIEXPORT void JNICALL
+Java_com_dkc1recomp_android_MainActivity_nativeShutdown(
+        JNIEnv *env, jobject thiz) {
+
+    if (s_initialized) {
+        RtlWriteSram();
+        s_initialized = 0;
+    }
+
+    free(s_rom);
+    s_rom = NULL;
+    Dkc1AndroidAudioShutdown();
+
+    LOGI("Engine shut down");
+}

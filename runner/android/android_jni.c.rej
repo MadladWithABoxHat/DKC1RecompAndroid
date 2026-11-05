@@ -1,0 +1,26 @@
+--- runner/android/android_jni.c	2026-11-04 10:24:18.425482355 +0000
++++ runner/android/android_jni.c	2026-11-04 10:24:18.449655918 +0000
+@@ -1,8 +1,11 @@
+ 
+ #include <jni.h>
+ #include <android/log.h>
++#include <stdatomic.h>
+ #include <stdint.h>
++#include <stdio.h>
+ #include <stdlib.h>
++#include <unistd.h>
+ 
+ #include "common_cpu_infra.h"
+ #include "common_rtl.h"
+@@ -112,8 +156,9 @@
+ 
+     Dkc1BeginDrawing(s_pixels, GAME_WIDTH * 4);
+ 
+-    RtlReadSram();
+-    
++    if (!Dkc1AndroidSramLoad(g_sram, (size_t)g_sram_size))
++        LOGE("Battery save not loaded (unexpected cartridge RAM size %d)", g_sram_size);
++
+     if (!Dkc1AndroidAudioInit()) {
+         LOGE("Audio initialization failed. Continuing without audio.");
+     }

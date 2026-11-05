@@ -93,6 +93,11 @@ list(REMOVE_ITEM DKC1_ENGINE_SOURCES
     "${SNESRECOMP_ROOT}/runner/src/keybinds.c"
     "${SNESRECOMP_ROOT}/runner/src/host_report.c")
 
+if(ANDROID)
+    include(cmake/android.cmake)
+    return()
+endif()
+
 if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
     include(cmake/ios.cmake)
     return()
